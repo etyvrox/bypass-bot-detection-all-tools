@@ -5,6 +5,11 @@ import burp.api.montoya.MontoyaApi;
 import net.portswigger.burp.extensions.beens.Browsers;
 import net.portswigger.burp.extensions.beens.MatchAndReplace;
 
+import burp.api.montoya.http.handler.HttpHandler;
+import burp.api.montoya.http.handler.HttpRequestToBeSent;
+import burp.api.montoya.http.handler.RequestToBeSentAction;
+import burp.api.montoya.ui.UserInterface;
+
 import javax.swing.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -12,11 +17,14 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 public class BypassBotDetection implements BurpExtension {
+    public static volatile boolean globalModeEnabled = true;
     @Override
     public void initialize(MontoyaApi montoyaApi) {
         montoyaApi.extension().setName(Utilities.getResourceString("tool_name"));
         try {
             new Utilities(montoyaApi);
+            montoyaApi.http().registerHttpHandler(new GlobalHttpHandler());
+            montoyaApi.userInterface().registerSuiteTab("Bot Bypass", new GlobalModeTab());
             BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
             ThreadPoolExecutor taskEngine = new ThreadPoolExecutor(1, 1, 1, TimeUnit.MINUTES, tasks);
             Utilities.saveTLSSettings();
@@ -52,4 +60,43 @@ public class BypassBotDetection implements BurpExtension {
             montoyaApi.logging().logToError(e.getMessage());
         }
     }
+private static class GlobalHttpHandler implements HttpHandler {
+
+    @Override
+    public RequestToBeSentAction handleHttpRequestToBeSent(HttpRequestToBeSent request) {
+
+        if (!globalModeEnabled) {
+            return RequestToBeSentAction.continueWith(request);
+        }
+
+        if (request.toolSource().isFromRepeater()
+                || request.toolSource().isFromIntruder()
+                || request.toolSource().isFromProxy()) {
+
+            Utilities.log("Applying global Firefox TLS profile");
+
+            Utilities.updateTLSSettings(
+                    Constants.BROWSERS_PROTOCOLS.get(Browsers.FIREFOX.name),
+                    Constants.BROWSERS_CIPHERS.get(Browsers.FIREFOX.name)
+            );
+
+            Utilities.updateProxySettings(MatchAndReplace.create(Browsers.FIREFOX));
+        }
+
+        return RequestToBeSentAction.continueWith(request);
+    }
+}
+    private static class GlobalModeTab extends JPanel {
+
+    public GlobalModeTab() {
+        JCheckBox toggle = new JCheckBox("Enable global bot bypass for Repeater/Intruder", true);
+
+        toggle.addActionListener(e -> {
+            globalModeEnabled = toggle.isSelected();
+            Utilities.log("Global bot bypass: " + (globalModeEnabled ? "ON" : "OFF"));
+        });
+
+        add(toggle);
+    }
+}
 }
